@@ -1,0 +1,48 @@
+from serverSock import serverSock
+from userMan import userMan
+import json
+
+userMan = userMan()
+
+class serverSock(serverSock):
+	def onMessage(self, addr, msg):
+		print msg
+		msg = json.loads(msg)
+		if msg["command"] == "list profil":
+			if self.clients.has_key(addr):
+				resp = {"respond":"list profil", "data":userMan.listProfil()}
+				self.clients[addr].send(json.dumps(resp))
+		elif msg["command"] == "detail profil":
+			if self.clients.has_key(addr):
+				resp = {"respond":"detail profil", "data":userMan.detailProfil(msg["data"])}
+				self.clients[addr].send(json.dumps(resp))
+		elif msg["command"] == "num users":
+			if self.clients.has_key(addr):
+				resp = {"respond":"num users", "data":userMan.numUsers(msg["data"])}
+				self.clients[addr].send(json.dumps(resp))
+		elif msg["command"] == "list users":
+			if self.clients.has_key(addr):
+				resp = {"respond":"list users", "data":userMan.listUsers(msg["data"]["groupname"], msg["data"]["page"], msg["data"]["limit"])}
+				self.clients[addr].send(json.dumps(resp))
+		elif msg["command"] == "detail user":
+			if self.clients.has_key(addr):
+				resp = {"respond":"detail user", "data":userMan.detailUser(msg["data"])}
+				self.clients[addr].send(json.dumps(resp))
+		elif msg["command"] == "delete users":
+			if self.clients.has_key(addr):
+				resp = {"respond":"delete users", "data":userMan.deleteUsers(msg["data"])}
+				self.clients[addr].send(json.dumps(resp))
+		elif msg["command"] == "reset user":
+			key = {"expired": "acctstarttime","uptime": "acctsessiontime","d_upload": "acctoutputoctets","d_download": "acctinputoctets"}
+			if self.clients.has_key(addr):
+				resp = {"respond":"reset user", "data":userMan.resetUser(msg["data"]["username"], key[msg["data"]["label"]])}
+				self.clients[addr].send(json.dumps(resp))
+		elif msg["command"] == "reset password":
+			if self.clients.has_key(addr):
+				resp = {"respond":"reset password", "data":userMan.resetUser(msg["data"]["username"], msg["data"]["new password"])}
+				self.clients[addr].send(json.dumps(resp))
+
+if __name__ == "__main__":
+	ws = serverSock("ghuvronsgg104986")
+	ws.run()
+	ws.close()

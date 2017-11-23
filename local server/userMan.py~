@@ -1,0 +1,295 @@
+from mySQLHandler import mySQLHandler
+import datetime
+from random import randint as rand
+
+mysql = mySQLHandler("localhost","root","gg104986","radius")
+class userMan:
+	def createProfil(self, data):
+		groupname = data["name_profil"]
+		price = data["price"]
+		rate_limit = None
+		max_d = None
+		max_u = None
+		max_t = None
+		expired = None
+		uptime = None
+		if data["tx_rl"] != "0" or data["rx_rl"] != "0":
+			rate_limit = data["tx_rl"]+"/"+data["rx_rl"]
+			if data["tx_br"] != "0" or data["rx_br"] != "0":
+				rate_limit = rate_limit+" "+data["tx_br"]+"/"+data["rx_br"]
+				if data["tx_bt"] != "0" or data["rx_bt"] != "0":
+					rate_limit = rate_limit+" "+data["tx_bt"]+"/"+data["rx_bt"]
+					if data["tx_btime"] != "0" or data["rx_btime"] != "0":
+						rate_limit = rate_limit+" "+data["tx_btime"]+"/"+data["rx_btime"];
+		if data["max_download"] != "":
+			max_d = data["max_download"]
+		if data["max_upload"] != "":
+			max_u = data["max_upload"]
+		if data["max_total"] != "":
+			max_t = data["max_total"]
+		if data["expired"] != "":
+			expired = data["expired"]
+		if data["uptime"] != "":
+			uptime = data["uptime"]
+		
+		g_data = {"groupname": groupname, "price":price}
+		if not mysql.db_insert("groups", g_data):
+			return False
+		
+		print expired
+		print uptime
+		print max_t
+		print max_u
+		print max_d
+		print rate_limit
+		if expired:
+			g_data = {"groupname": groupname, "attribute": 'Expire-After', "op": ':=', "value":expired}
+			mysql.db_insert("radgroupcheck", g_data)
+		if uptime:
+			g_data = {"groupname": groupname, "attribute": 'Time-Limit', "op": ':=', "value":expired}
+			mysql.db_insert("radgroupcheck", g_data)
+		if max_t:
+			g_data = {"groupname": groupname, "attribute": 'Max-Total', "op": ':=', "value":max_t}
+			mysql.db_insert("radgroupcheck", g_data)
+		if max_u:
+			g_data = {"groupname": groupname, "attribute": 'Max-Upload', "op": ':=', "value":max_u}
+			mysql.db_insert("radgroupcheck", g_data)
+		if max_d:
+			g_data = {"groupname": groupname, "attribute": 'Max-Download', "op": ':=', "value":max_d}
+			mysql.db_insert("radgroupcheck", g_data)
+		if rate_limit:
+			g_data = {"groupname": groupname, "attribute": 'Mikrotik-Rate-Limit', "op": '=', "value":rate_limit}
+			mysql.db_insert("radgroupreply", g_data)
+		return True
+
+	def listProfil(self):
+		data =  mysql.db_select(
+					"groups LEFT JOIN radusergroup ON groups.groupname = radusergroup.groupname", 
+					["count(radusergroup.username) as jml"," groups.groupname"],
+					"TRUE group by groups.groupname")
+		result = []
+		for i in data:
+			result.append({'jml':i[0], 'groupname':i[1]})
+		return result
+	
+	def detailProfil(self, groupname):
+		result = {}
+		
+		keys = {	"price" : "price", "Expire-After" : "expired", "Time-Limit" : "uptime", 
+					"Max-Upload" : "maxU", "Max-Download" : "maxD", "Max-Total": "maxT",
+					"Mikrotik-Rate-Limit" : "rLimit", "Session-Timeout":"sTime"}
+		data =  mysql.db_select("groups", ["groupname", "price"], "groupname='"+groupname+"'")
+		if not len(data):
+			return False
+		i = data[0]
+		result['groupname'] = i[0]
+		result['price'] = i[1]
+		data =  mysql.db_select("radgroupcheck", ["attribute","value"], "groupname='"+groupname+"'")
+		for i in data:
+			result[keys[i[0]]] = i[1]
+		data =  mysql.db_select("radgroupreply", ["attribute","value"], "groupname='"+groupname+"'")
+		print data
+		for i in data:
+			result[keys[i[0]]] = i[1]
+		return result
+	def deleteProfil(self, groupname):
+		if self.numUsers(groupname) != 0:
+			return False
+		return mysql.db_delete("groups", "groupname='"+groupname+"'")
+	
+	def numUsers(self, groupname):
+		data =  mysql.db_select("radusergroup", 
+										["count(*) as jml"],
+										"groupname='"+groupname+"'")
+		return data[0][0]
+	
+	def listUsers(self, groupname, page, limit = 10):
+		l = (int(page)-1) * int(limit)
+		data =  mysql.db_select(
+					"((users INNER JOIN radusergroup ON users.username = radusergroup.username) \
+					INNER JOIN (select username, value from radcheck where attribute = 'Cleartext-Password') rc \
+					ON users.username = rc.username)",
+					["users.username", "rc.value as password", "users.keterangan"], 
+					"radusergroup.groupname = '"+groupname+"' ORDER BY date_created DESC\
+					LIMIT "+str(l)+", "+str(limit)
+					)
+		result = []
+		for i in data:
+			result.append({'username':i[0], 'password':i[1], 'keterangan':i[2]})
+		return result
+	
+	def detailUser(self, username):
+		data =  mysql.db_select(
+					"	((users LEFT JOIN radacct ON users.username = radacct.username) \
+						INNER JOIN (select username, value from radcheck where attribute = 'Cleartext-Password') rc \
+						ON users.username = rc.username)",
+					["users.username", 
+						"rc.value as password",
+						"min(acctstarttime) as starton",
+						"sum(acctsessiontime) as uptime", 
+						"sum(acctinputoctets) as downloaded", 
+						"sum(acctoutputoctets) as uploaded"], 
+					"users.username = '"+username+"'")
+		i = data[0]
+		starton = None
+		uptime = None
+		downloaded = None
+		uploaded = None
+		if i[2]:
+			starton = i[2].strftime('%Y-%m-%d %H:%M:%S')
+		if i[3]:
+			uptime = long(i[3])
+		if i[4]:
+			downloaded = long(i[4])
+		if i[5]:
+			uploaded = long(i[5])
+		result = {'username':i[0], 'password':i[1], 'starton': starton, 'uptime':uptime, 'downloaded':downloaded, 'uploaded':uploaded}
+		print result
+		return result
+
+	def createSingleUser(self, username, password, groupname, keterangan):
+		data = {
+			"username" : username,
+			"usercode" : self.stringToCode(username), 
+			"length" : len(username), 
+			"keterangan":keterangan,
+			"date_created":mysql.now
+		}
+		if mysql.db_insert("users", data) :
+			
+			data = {"username" : username, "attribute" : "Cleartext-Password", "op" : ":=", "value" : password}
+			mysql.db_insert("radcheck", data);
+	
+			data = {"username" : username, "groupname" : groupname, "priority" : 1}
+			mysql.db_insert("radusergroup", data);
+			return True
+		return False
+	
+	def createMultiUser(self, groupname, num_user, length_username, length_password, keterangan):
+		data =  mysql.db_select("users",	["usercode"], "length = "+str(length_username)+" and usercode != -1");
+		
+		users = [];
+		for i in range(len(data)):
+			users.append(data[i][0])
+		users.sort()
+		readyusers = users[:]
+		for i in range(num_user):
+			self.generateRand(users, 0, (26**length_username)-1)
+		for i in readyusers:
+			users.remove(i)
+		print len(users)
+		for u in users :
+			username = self.codeToString(u, length_username)
+			password = self.codeToString(rand(0, (26**length_password)-1), length_password)
+			
+			data = {"username" : username, "usercode" : u, "length" : length_username, "keterangan":keterangan, "date_created":mysql.now}
+			mysql.db_insert("users", data)
+			
+			data = {"username" : username, "attribute" : "Cleartext-Password", "op" : ":=", "value" : password}
+			mysql.db_insert("radcheck", data);
+
+			data = {"username" : username, "groupname" : groupname, "priority" : 1}
+			mysql.db_insert("radusergroup", data)
+		return True
+	
+	def deleteUsers(self, users):
+		numDeleted = 0
+		for username in users:
+			if mysql.db_delete("users", "username = '"+username+"'"):
+				numDeleted += 1
+		return numDeleted
+
+	def resetUser(self, username, label):
+		if mysql.db_update("radacct", {label:None}, "username = '"+username+"'"):
+			return True
+		return False
+
+	def resetPassword(self, username, newPassword):
+		if mysql.db_update("radcheck", {"value":newPassword}, "username = '"+username+"' and attribute='Cleartext-Password'"):
+			return True
+		return False
+	
+	def codeToString(self, code, min_length):
+		s = ''
+		sisa = code % 26;
+		s = chr(97+sisa)+s;
+		code = (code-sisa) / 26
+		while(code):
+			sisa = code % 26;
+			s = chr(97+sisa)+s
+			code = (code-sisa) / 26
+		while(len(s) < min_length):
+			s = 'a'+s
+		return s
+
+	def stringToCode(self, string):
+		n = 0
+		n = ord(string[0])-97
+		for i in range(1, len(string)):
+			o = ord(string[i])-97
+			if o < 0 or o > 25 or i > 6 :
+				return -1
+			n = o + n*26
+		return n
+	
+	def generateRand(self, num_arr, min, max, low_limit = 0, up_limit = None, rand_num = None):
+		if up_limit == None :
+			rand_num = rand(min, max)
+			up_limit = len(num_arr) - 1
+			if up_limit < 0 :
+				num_arr.append(rand_num)
+				return
+			if rand_num > num_arr[up_limit] :
+				num_arr.append(rand_num)
+			elif rand_num < num_arr[0] :
+				num_arr.insert(0, rand_num)
+			elif (up_limit - low_limit) != (num_arr[up_limit] - num_arr[low_limit]) :
+				self.generateRand(num_arr, min, max, low_limit, up_limit, rand_num)
+			else :
+				if num_arr[up_limit] < max :
+					num_arr.append(num_arr[up_limit] + 1)
+				elif num_arr[low_limit] > min :
+					num_arr.insert(0, num_arr[low_limit] - 1)
+		else :
+			if up_limit - low_limit == 1 :
+				if rand_num == None or num_arr[low_limit] == rand_num :
+					rand_num = num_arr[low_limit] + 1
+				elif num_arr[up_limit] == rand_num :
+					rand_num = num_arr[up_limit] - 1
+				num_arr.insert(up_limit, rand_num)
+				return
+			pointer = (up_limit - low_limit)/2 + low_limit
+			if rand_num == None :
+				if (up_limit - pointer) != (num_arr[up_limit] - num_arr[pointer]):
+					self.generateRand(num_arr, min, max, pointer, up_limit)
+				else :
+					self.generateRand(num_arr, min, max, low_limit, pointer)
+			else :
+				if rand_num > num_arr[pointer] :
+					if (up_limit - pointer) != (num_arr[up_limit] - num_arr[pointer]) :
+						self.generateRand(num_arr, min, max, pointer, up_limit, rand_num)
+					else :
+						self.generateRand(num_arr, min, max, low_limit, pointer)
+				elif rand_num < num_arr[pointer] :
+					if (pointer - low_limit) != (num_arr[pointer] - num_arr[low_limit]) :
+						self.generateRand(num_arr, min, max, low_limit, pointer, rand_num)
+					else :
+						self.generateRand(num_arr, min, max, pointer, up_limit)
+				else :
+					if (pointer - low_limit) != (num_arr[pointer] - num_arr[low_limit]) :
+						self.generateRand(num_arr, min, max, low_limit, pointer);
+					else :
+						self.generateRand(num_arr, min, max, pointer, up_limit);
+				
+	def listUsed(self):
+		data =  mysql.db_select(
+			"(select username, min(acctstarttime) as acctstarttime from radacct where acctstarttime group by username) l ",
+			["count(l.username), DATE_FORMAT(l.acctstarttime, '%Y %m %d') as first_login"],
+			"TRUE group by first_login");
+		print data
+		date = datetime.date.strptime('2005 01 09', '%Y %m %d').date()
+		return date
+
+if __name__ == "__main__":
+	userMan = userMan()
+	userMan.listProfil()
